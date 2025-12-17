@@ -5,7 +5,7 @@
 
 const bcrypt = require('bcryptjs');
 const pool = require('../config/db');
-
+const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
 /**
  * Get all drivers
  */
@@ -412,37 +412,72 @@ const getAllTickets = async (req, res) => {
     `;
     const params = [];
 
-    if (month) {
-      // Extract year and month from format like "Nov 2025"
-      const [monthName, year] = month.split(' ');
-      const monthNum = new Date(`${monthName} 1, ${year}`).getMonth() + 1;
-      query += ` AND MONTH(t.date) = ? AND YEAR(t.date) = ?`;
-      params.push(monthNum, year);
+    if (month && month.trim() !== '') {
+      let monthNum, year;
+      
+      // Handle different month formats
+      if (month.includes('-')) {
+        // Format: "2025-11" (YYYY-MM)
+        const parts = month.split('-');
+        if (parts.length === 2 && parts[0] && parts[1]) {
+          year = parseInt(parts[0], 10);
+          monthNum = parseInt(parts[1], 10);
+        }
+      } else {
+        // Format: "Nov 2025" or "November 2025"
+        const parts = month.split(' ');
+        if (parts.length >= 2 && parts[0] && parts[parts.length - 1]) {
+          const monthName = parts[0];
+          year = parseInt(parts[parts.length - 1], 10);
+          const dateObj = new Date(`${monthName} 1, ${year}`);
+          if (!isNaN(dateObj.getTime())) {
+            monthNum = dateObj.getMonth() + 1;
+          }
+        }
+      }
+      
+      // Only add to query if we have valid month and year
+      if (monthNum && year && !isNaN(monthNum) && !isNaN(year) && monthNum >= 1 && monthNum <= 12) {
+        query += ` AND MONTH(t.date) = ? AND YEAR(t.date) = ?`;
+        params.push(monthNum, year);
+      }
     }
 
-    if (customer && customer !== 'All') {
+    if (customer && customer !== 'All' && customer.trim() !== '') {
       query += ` AND t.customer = ?`;
       params.push(customer);
     }
 
-    if (driver && driver !== 'All') {
+    if (driver && driver !== 'All' && driver.trim() !== '') {
       query += ` AND d.name = ?`;
       params.push(driver);
     }
 
-    if (status) {
+    if (status && status.trim() !== '') {
       query += ` AND t.status = ?`;
       params.push(status);
     }
 
-    if (search) {
+    if (search && search.trim() !== '') {
       query += ` AND t.ticket_number LIKE ?`;
       params.push(`%${search}%`);
     }
 
     query += ` ORDER BY t.date DESC, t.created_at DESC`;
 
-    const [tickets] = await pool.execute(query, params);
+    // Validate params - ensure no undefined values
+    const validParams = params.filter(param => param !== undefined && param !== null);
+    if (validParams.length !== params.length) {
+      console.error('[getAllTickets] Invalid parameters detected:', { params, validParams });
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid filter parameters provided',
+        error: 'Some filter parameters contain invalid values'
+      });
+    }
+
+    console.log('[getAllTickets] Executing query with params:', { query, params: validParams });
+    const [tickets] = await pool.execute(query, validParams);
 
     return res.json({
       success: true,
@@ -755,75 +790,95 @@ const generateInvoice = async (req, res) => {
 /**
  * Download invoice as PDF
  * Route: GET /admin/invoices/download/:customerId?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+ * Returns: PDF binary data (application/pdf)
  */
 const downloadInvoice = async (req, res) => {
+  // Set error response headers early to ensure JSON errors are properly identified
+  const sendError = (statusCode, message) => {
+    res.status(statusCode);
+    res.setHeader('Content-Type', 'application/json');
+    return res.json({ success: false, message });
+  };
+
   try {
-    // Get customerId from URL params, dates from query params
     const { customerId } = req.params;
     const { startDate, endDate } = req.query;
 
+    console.log(`[PDF Download] Request received: customerId=${customerId}, startDate=${startDate}, endDate=${endDate}`);
+
     // Validate required parameters
     if (!customerId || !startDate || !endDate) {
-      res.status(400);
-      return res.send('Customer ID, start date, and end date are required');
+      console.error('[PDF Download] Missing required parameters');
+      return sendError(400, 'Customer ID, start date, and end date are required');
     }
 
-    // Validate date format
+    // Validate date format (YYYY-MM-DD)
     const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
     if (!dateRegex.test(startDate) || !dateRegex.test(endDate)) {
-      res.status(400);
-      return res.send('Dates must be in YYYY-MM-DD format');
+      console.error('[PDF Download] Invalid date format');
+      return sendError(400, 'Dates must be in YYYY-MM-DD format');
     }
 
-    // Get customer name
-    const [customers] = await pool.execute(
-      'SELECT name FROM customers WHERE id = ?',
-      [customerId]
-    );
-
+    // Fetch customer name
+    const [customers] = await pool.execute('SELECT name FROM customers WHERE id = ?', [customerId]);
     if (customers.length === 0) {
-      res.status(404);
-      return res.send('Customer not found');
+      console.error(`[PDF Download] Customer not found: ${customerId}`);
+      return sendError(404, 'Customer not found');
     }
-
     const customerName = customers[0].name;
+    console.log(`[PDF Download] Customer found: ${customerName}`);
 
-    // Get approved tickets for customer in date range
+    // Fetch approved tickets in date range
     const [tickets] = await pool.execute(
       `SELECT t.*, d.name as driver_name, d.user_id_code
        FROM tickets t
        LEFT JOIN drivers d ON t.driver_id = d.id
        WHERE t.customer = ? 
-       AND t.status = 'Approved'
-       AND t.date >= ? AND t.date <= ?
+         AND t.status = 'Approved'
+         AND t.date >= ? AND t.date <= ?
        ORDER BY t.date ASC`,
       [customerName, startDate, endDate]
     );
 
     if (tickets.length === 0) {
-      res.status(404);
-      return res.send('No approved tickets found for the selected date range');
+      console.error(`[PDF Download] No tickets found for customer ${customerName} in date range`);
+      return sendError(404, 'No approved tickets found for the selected date range');
     }
+
+    console.log(`[PDF Download] Found ${tickets.length} tickets`);
 
     // Calculate totals
     const subtotal = tickets.reduce((sum, ticket) => sum + parseFloat(ticket.total_bill || 0), 0);
     const gst = subtotal * 0.05; // 5% GST
     const total = subtotal + gst;
 
+    console.log(`[PDF Download] Totals calculated: subtotal=$${subtotal.toFixed(2)}, gst=$${gst.toFixed(2)}, total=$${total.toFixed(2)}`);
+
     // Generate PDF using pdf-lib
-    const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
-    const pdfDoc = await PDFDocument.create();
+    console.log('[PDF Download] Starting PDF generation...');
+    let pdfDoc;
+    let currentPage;
+    let font;
+    let boldFont;
+    let width, height;
     
-    // Add a page
-    const page = pdfDoc.addPage([612, 792]); // US Letter size
-    const { width, height } = page.getSize();
-    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    try {
+      pdfDoc = await PDFDocument.create();
+      currentPage = pdfDoc.addPage([612, 792]); // US Letter
+      const pageSize = currentPage.getSize();
+      width = pageSize.width;
+      height = pageSize.height;
+      font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    } catch (pdfInitError) {
+      console.error('[PDF Download] Error initializing PDF document:', pdfInitError);
+      return sendError(500, `Failed to initialize PDF: ${pdfInitError.message}`);
+    }
     
     const primaryColor = rgb(0.16, 0.36, 0.32); // #295b52
-    
-    // Invoice Header
-    page.drawText('INVOICE', {
+
+    // Header
+    currentPage.drawText('INVOICE', {
       x: 50,
       y: height - 50,
       size: 24,
@@ -831,41 +886,22 @@ const downloadInvoice = async (req, res) => {
       color: primaryColor,
     });
 
-    // Invoice Details
+    // Invoice metadata
     const invoiceNumber = `INV-${customerId}-${Date.now().toString().slice(-6)}`;
     const invoiceDate = new Date().toLocaleDateString();
-    
-    page.drawText(`Invoice #: ${invoiceNumber}`, {
-      x: 50,
-      y: height - 80,
-      size: 10,
-      font: font,
-    });
+    currentPage.drawText(`Invoice #: ${invoiceNumber}`, { x: 50, y: height - 80, size: 10, font });
+    currentPage.drawText(`Date of Issue: ${invoiceDate}`, { x: 50, y: height - 95, size: 10, font });
 
-    page.drawText(`Date of Issue: ${invoiceDate}`, {
-      x: 50,
-      y: height - 95,
-      size: 10,
-      font: font,
-    });
-
-    // Bill To Section
-    page.drawText('Bill To:', {
+    // Bill To
+    currentPage.drawText('Bill To:', {
       x: width - 200,
       y: height - 50,
       size: 12,
       font: boldFont,
       color: primaryColor,
     });
-
-    page.drawText(customerName, {
-      x: width - 200,
-      y: height - 70,
-      size: 10,
-      font: font,
-    });
-
-    page.drawText(`Period: ${startDate} to ${endDate}`, {
+    currentPage.drawText(customerName, { x: width - 200, y: height - 70, size: 10, font });
+    currentPage.drawText(`Period: ${startDate} to ${endDate}`, {
       x: width - 200,
       y: height - 85,
       size: 9,
@@ -876,22 +912,18 @@ const downloadInvoice = async (req, res) => {
     // Table Header
     let yPos = height - 140;
     const rowHeight = 20;
-    const colWidths = [80, 80, 120, 80, 60, 70, 80]; // Date, Ticket#, Description, Driver, Qty, Rate, Total
-    
-    // Header background
-    page.drawRectangle({
+    const colWidths = [80, 80, 120, 80, 60, 70, 80];
+    currentPage.drawRectangle({
       x: 50,
       y: yPos - 15,
       width: width - 100,
       height: rowHeight,
       color: primaryColor,
     });
-
-    // Header text
     const headers = ['Date', 'Ticket #', 'Description', 'Driver', 'Qty', 'Rate', 'Total'];
     let xPos = 55;
     headers.forEach((header, index) => {
-      page.drawText(header, {
+      currentPage.drawText(header, {
         x: xPos,
         y: yPos - 5,
         size: 10,
@@ -903,19 +935,19 @@ const downloadInvoice = async (req, res) => {
 
     yPos -= rowHeight;
 
-    // Table rows
+    // Table Rows
     tickets.forEach((ticket) => {
+      // Check if we need a new page
       if (yPos < 100) {
-        // Add new page if needed
-        const newPage = pdfDoc.addPage([612, 792]);
-        yPos = height - 50;
+        currentPage = pdfDoc.addPage([612, 792]);
+        yPos = currentPage.getSize().height - 50;
       }
 
       const rowData = [
-        ticket.date,
-        ticket.ticket_number || '-',
-        (ticket.job_type || ticket.description || '-').substring(0, 20),
-        (ticket.driver_name || '-').substring(0, 15),
+        String(ticket.date || '-'),
+        String(ticket.ticket_number || '-'),
+        String((ticket.job_type || ticket.description || '-').substring(0, 20)),
+        String((ticket.driver_name || '-').substring(0, 15)),
         parseFloat(ticket.quantity || 0).toFixed(1),
         `$${parseFloat(ticket.bill_rate || 0).toFixed(2)}`,
         `$${parseFloat(ticket.total_bill || 0).toFixed(2)}`,
@@ -923,91 +955,94 @@ const downloadInvoice = async (req, res) => {
 
       xPos = 55;
       rowData.forEach((cell, index) => {
-        page.drawText(String(cell), {
-          x: xPos,
-          y: yPos - 5,
-          size: 9,
-          font: font,
-        });
+        try {
+          currentPage.drawText(String(cell), {
+            x: xPos,
+            y: yPos - 5,
+            size: 9,
+            font: font,
+          });
+        } catch (textError) {
+          console.warn(`[PDF Download] Error drawing text "${cell}":`, textError.message);
+        }
         xPos += colWidths[index];
       });
 
       yPos -= rowHeight;
     });
 
-    // Totals Section
+    // Totals (on last page)
     yPos -= 20;
-    const totalsY = yPos;
+    currentPage.drawText('Subtotal:', { x: width - 250, y: yPos, size: 10, font });
+    currentPage.drawText(`$${subtotal.toFixed(2)}`, { x: width - 100, y: yPos, size: 10, font });
+
+    currentPage.drawText('GST (5%):', { x: width - 250, y: yPos - 20, size: 10, font });
+    currentPage.drawText(`$${gst.toFixed(2)}`, { x: width - 100, y: yPos - 20, size: 10, font });
+
+    currentPage.drawText('Total:', {
+      x: width - 250,
+      y: yPos - 40,
+      size: 14,
+      font: boldFont,
+      color: primaryColor,
+    });
+    currentPage.drawText(`$${total.toFixed(2)}`, {
+      x: width - 100,
+      y: yPos - 40,
+      size: 14,
+      font: boldFont,
+      color: primaryColor,
+    });
+
+    // Finalize PDF
+    console.log('[PDF Download] Saving PDF document...');
+    const pdfBytesUint8 = await pdfDoc.save();
+
+    // Validate PDF bytes
+    if (!pdfBytesUint8 || pdfBytesUint8.length === 0) {
+      console.error('[PDF Download] PDF bytes are empty!');
+      return sendError(500, 'Failed to generate PDF: Empty PDF bytes');
+    }
+
+    // Convert Uint8Array to Buffer for Node.js
+    const pdfBytes = Buffer.from(pdfBytesUint8);
+
+    // Validate PDF header (should start with %PDF)
+    const pdfHeader = pdfBytes.slice(0, 4).toString('utf8');
+    console.log(`[PDF Download] PDF header check: "${pdfHeader}" (expected: "%PDF")`);
     
-    page.drawText('Subtotal:', {
-      x: width - 250,
-      y: totalsY,
-      size: 10,
-      font: font,
-    });
-    page.drawText(`$${subtotal.toFixed(2)}`, {
-      x: width - 100,
-      y: totalsY,
-      size: 10,
-      font: font,
-    });
+    if (pdfHeader !== '%PDF') {
+      console.error(`[PDF Download] Invalid PDF header: "${pdfHeader}" (hex: ${pdfBytes.slice(0, 4).toString('hex')})`);
+      console.error(`[PDF Download] First 20 bytes: ${pdfBytes.slice(0, 20).toString('hex')}`);
+      return sendError(500, 'Failed to generate PDF: Invalid PDF format');
+    }
 
-    page.drawText('GST (5%):', {
-      x: width - 250,
-      y: totalsY - 20,
-      size: 10,
-      font: font,
-    });
-    page.drawText(`$${gst.toFixed(2)}`, {
-      x: width - 100,
-      y: totalsY - 20,
-      size: 10,
-      font: font,
-    });
+    console.log(`[PDF Download] PDF generated successfully: ${pdfBytes.length} bytes`);
 
-    page.drawText('Total:', {
-      x: width - 250,
-      y: totalsY - 40,
-      size: 14,
-      font: boldFont,
-      color: primaryColor,
-    });
-    page.drawText(`$${total.toFixed(2)}`, {
-      x: width - 100,
-      y: totalsY - 40,
-      size: 14,
-      font: boldFont,
-      color: primaryColor,
-    });
-
-    // Generate PDF bytes
-    const pdfBytes = await pdfDoc.save();
-
-    // Set headers to prevent caching and ensure PDF download
+    // Prepare filename
     const sanitizedCustomerName = customerName.replace(/[^a-zA-Z0-9]/g, '_');
     const filename = `Invoice-${sanitizedCustomerName}-${startDate}-${endDate}.pdf`;
 
-    // Prevent caching - CRITICAL to avoid 304 responses
+    // Prevent caching (CRITICAL for PDF downloads)
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
-    res.removeHeader('ETag'); // Remove ETag to prevent 304
-    
-    // Set PDF headers
+    res.removeHeader('ETag');
+
+    // Set PDF headers - MUST be set before sending
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Length', pdfBytes.length);
 
-    // Return PDF binary data with 200 status
+    // Send PDF binary data directly (Buffer is already correct format)
+    console.log(`[PDF Download] Sending PDF response: ${pdfBytes.length} bytes`);
     res.status(200);
     return res.send(pdfBytes);
 
   } catch (error) {
-    console.error('Error downloading invoice PDF:', error);
-    // Return plain text error, not JSON
-    res.status(500);
-    res.setHeader('Content-Type', 'text/plain');
-    return res.send(`Failed to generate invoice PDF: ${error.message}`);
+    console.error('[PDF Download] Error generating PDF:', error);
+    console.error('[PDF Download] Stack trace:', error.stack);
+    return sendError(500, `Failed to generate invoice PDF: ${error.message}`);
   }
 };
 /**
