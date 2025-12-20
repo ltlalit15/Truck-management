@@ -74,5 +74,10 @@ router.get('/settlements/download/:driverId', adminController.downloadSettlement
 router.get('/settings/bill-rates', adminController.getBillRates);
 router.put('/settings/bill-rates', adminController.updateBillRates);
 
+// Truck management routes
+router.get('/trucks', adminController.getAllTrucks);
+router.post('/trucks', adminController.createTruck);
+router.delete('/trucks/:id', adminController.deleteTruck);
+
 module.exports = router;
 

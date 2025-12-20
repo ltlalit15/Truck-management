@@ -43,6 +43,29 @@ CREATE TABLE IF NOT EXISTS customers (
   INDEX idx_name (name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Trucks table (for truck number dropdown)
+CREATE TABLE IF NOT EXISTS trucks (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  truck_number VARCHAR(50) NOT NULL UNIQUE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_truck_number (truck_number)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Driver Customers table (junction table for driver-specific customers)
+CREATE TABLE IF NOT EXISTS driver_customers (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  driver_id INT NOT NULL,
+  customer_id INT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (driver_id) REFERENCES drivers(id) ON DELETE CASCADE,
+  FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE,
+  UNIQUE KEY unique_driver_customer (driver_id, customer_id),
+  INDEX idx_driver_id (driver_id),
+  INDEX idx_customer_id (customer_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Tickets table
 CREATE TABLE IF NOT EXISTS tickets (
   id INT AUTO_INCREMENT PRIMARY KEY,
@@ -51,6 +74,7 @@ CREATE TABLE IF NOT EXISTS tickets (
   truck_number VARCHAR(50),
   customer VARCHAR(255) NOT NULL,
   job_type VARCHAR(255),
+  equipment_type VARCHAR(255),
   ticket_number VARCHAR(100) NOT NULL,
   quantity DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
   photo_path VARCHAR(500),
@@ -66,7 +90,8 @@ CREATE TABLE IF NOT EXISTS tickets (
   INDEX idx_date (date),
   INDEX idx_customer (customer),
   INDEX idx_ticket_number (ticket_number),
-  INDEX idx_status (status)
+  INDEX idx_status (status),
+  INDEX idx_equipment_type (equipment_type)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Insert sample admin user
@@ -84,6 +109,15 @@ INSERT INTO customers (name, default_bill_rate) VALUES
 ('EllisDon', 110.00),
 ('GrindStone', 140.00)
 ON DUPLICATE KEY UPDATE name=name;
+
+-- Insert sample trucks (you can add more truck numbers as needed)
+INSERT INTO trucks (truck_number) VALUES
+('TRUCK-001'),
+('TRUCK-002'),
+('TRUCK-003'),
+('TRUCK-004'),
+('TRUCK-005')
+ON DUPLICATE KEY UPDATE truck_number=truck_number;
 
 -- Note: The admin password hash above is a placeholder
 -- In production, generate a proper hash using bcrypt.hash('password', 10)

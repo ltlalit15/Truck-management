@@ -946,7 +946,7 @@ const downloadInvoice = async (req, res) => {
       const rowData = [
         String(ticket.date || '-'),
         String(ticket.ticket_number || '-'),
-        String((ticket.job_type || ticket.description || '-').substring(0, 20)),
+        String((ticket.equipment_type || ticket.job_type || ticket.description || '-').substring(0, 20)),
         String((ticket.driver_name || '-').substring(0, 15)),
         parseFloat(ticket.quantity || 0).toFixed(1),
         `$${parseFloat(ticket.bill_rate || 0).toFixed(2)}`,
@@ -1317,6 +1317,119 @@ const updateBillRates = async (req, res) => {
   }
 };
 
+/**
+ * Get all trucks
+ */
+const getAllTrucks = async (req, res) => {
+  try {
+    const [trucks] = await pool.execute(
+      'SELECT id, truck_number, created_at, updated_at FROM trucks ORDER BY truck_number ASC'
+    );
+
+    return res.json({
+      success: true,
+      data: trucks
+    });
+  } catch (error) {
+    console.error('Error fetching trucks:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch trucks',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Create a new truck
+ */
+const createTruck = async (req, res) => {
+  try {
+    const { truck_number } = req.body;
+
+    if (!truck_number || truck_number.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Truck number is required'
+      });
+    }
+
+    // Check if truck number already exists
+    const [existing] = await pool.execute(
+      'SELECT id FROM trucks WHERE truck_number = ?',
+      [truck_number.trim()]
+    );
+
+    if (existing.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Truck number already exists'
+      });
+    }
+
+    const [result] = await pool.execute(
+      'INSERT INTO trucks (truck_number) VALUES (?)',
+      [truck_number.trim()]
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: 'Truck added successfully',
+      data: { id: result.insertId, truck_number: truck_number.trim() }
+    });
+  } catch (error) {
+    console.error('Error creating truck:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to create truck',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Delete a truck
+ */
+const deleteTruck = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Truck ID is required'
+      });
+    }
+
+    // Check if truck exists
+    const [truck] = await pool.execute(
+      'SELECT id, truck_number FROM trucks WHERE id = ?',
+      [id]
+    );
+
+    if (truck.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Truck not found'
+      });
+    }
+
+    await pool.execute('DELETE FROM trucks WHERE id = ?', [id]);
+
+    return res.json({
+      success: true,
+      message: 'Truck deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting truck:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to delete truck',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   getAllDrivers,
   createDriver,
@@ -1336,6 +1449,9 @@ module.exports = {
   generateSettlement,
   downloadSettlement,
   getBillRates,
-  updateBillRates
+  updateBillRates,
+  getAllTrucks,
+  createTruck,
+  deleteTruck
 };
 
