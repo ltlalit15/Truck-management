@@ -7,6 +7,8 @@ const express = require('express');
 const router = express.Router();
 const { authenticate, isAdmin } = require('../middleware/auth');
 const adminController = require('../controllers/adminController');
+const masterDataController = require('../controllers/masterDataController');
+const systemSettingsController = require('../controllers/systemSettingsController');
 const multer = require('multer');
 const path = require('path');
 
@@ -77,7 +79,31 @@ router.put('/settings/bill-rates', adminController.updateBillRates);
 // Truck management routes
 router.get('/trucks', adminController.getAllTrucks);
 router.post('/trucks', adminController.createTruck);
+router.put('/trucks/:id', adminController.updateTruck);
 router.delete('/trucks/:id', adminController.deleteTruck);
+
+// Company management routes
+router.get('/companies', adminController.getAllCompanies);
+router.post('/companies', adminController.createCompany);
+router.put('/companies/:id', adminController.updateCompany);
+router.delete('/companies/:id', adminController.deleteCompany);
+
+// Master Data Settings routes
+router.get('/master/customers', masterDataController.getAllCustomerMaster);
+router.post('/master/customers', masterDataController.createCustomerMaster);
+router.delete('/master/customers/:id', masterDataController.deleteCustomerMaster);
+
+router.get('/master/equipment-types', masterDataController.getAllEquipmentTypes);
+router.post('/master/equipment-types', masterDataController.createEquipmentType);
+router.delete('/master/equipment-types/:id', masterDataController.deleteEquipmentType);
+
+router.get('/master/trucks', masterDataController.getAllTruckMaster);
+router.post('/master/trucks', masterDataController.createTruckMaster);
+router.delete('/master/trucks/:id', masterDataController.deleteTruckMaster);
+
+// System Settings routes
+router.get('/system-settings', systemSettingsController.getSystemSettings);
+router.put('/system-settings', systemSettingsController.updateSystemSettings);
 
 module.exports = router;
 

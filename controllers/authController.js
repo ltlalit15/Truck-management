@@ -25,11 +25,21 @@ const login = async (req, res) => {
         });
       }
 
-      // Find admin user
-      const [users] = await pool.execute(
-        'SELECT id, email, password, role FROM users WHERE email = ? AND role = ?',
-        [email, 'admin']
-      );
+      // Find user (admin login)
+      const roleToCheck = 'admin';
+      
+      let users;
+      try {
+        [users] = await pool.execute(
+          `SELECT u.id, u.email, u.password, u.role
+           FROM users u 
+           WHERE u.email = ? AND u.role = ?`,
+          [email, roleToCheck]
+        );
+      } catch (dbError) {
+        console.error('Admin login database error:', dbError);
+        throw dbError;
+      }
 
       if (users.length === 0) {
         return res.status(401).json({
@@ -63,7 +73,8 @@ const login = async (req, res) => {
         user: {
           id: user.id,
           email: user.email,
-          role: user.role
+          role: user.role,
+          companyName: 'Noor Trucking Inc.'
         }
       });
     } else if (loginType === 'driver' || user_id_code) {
@@ -76,13 +87,19 @@ const login = async (req, res) => {
       }
 
       // Find driver by user_id_code
-      const [drivers] = await pool.execute(
-        `SELECT d.id, d.user_id, d.user_id_code, d.name, d.pin, u.role 
-         FROM drivers d 
-         JOIN users u ON d.user_id = u.id 
-         WHERE d.user_id_code = ? AND u.role = ?`,
-        [user_id_code, 'driver']
-      );
+      let drivers;
+      try {
+        [drivers] = await pool.execute(
+          `SELECT d.id, d.user_id, d.user_id_code, d.name, d.pin, u.role
+           FROM drivers d 
+           JOIN users u ON d.user_id = u.id 
+           WHERE d.user_id_code = ? AND u.role = ?`,
+          [user_id_code, 'driver']
+        );
+      } catch (dbError) {
+        console.error('Driver login database error:', dbError);
+        throw dbError;
+      }
 
       if (drivers.length === 0) {
         return res.status(401).json({
@@ -118,7 +135,8 @@ const login = async (req, res) => {
           driverId: driver.id,
           name: driver.name,
           user_id_code: driver.user_id_code,
-          role: driver.role
+          role: driver.role,
+          companyName: 'Noor Trucking Inc.'
         }
       });
     } else {

@@ -6,6 +6,51 @@
 const bcrypt = require('bcryptjs');
 const pool = require('../config/db');
 const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
+
+/**
+ * Helper function to ensure customer columns exist
+ * Automatically adds missing columns if they don't exist
+ */
+const ensureCustomerColumns = async () => {
+  try {
+    const columnsToAdd = [
+      { name: 'contact_person', sql: 'ALTER TABLE customers ADD COLUMN contact_person VARCHAR(255) NULL AFTER name' },
+      { name: 'phone', sql: 'ALTER TABLE customers ADD COLUMN phone VARCHAR(20) NULL AFTER contact_person' },
+      { name: 'email', sql: 'ALTER TABLE customers ADD COLUMN email VARCHAR(255) NULL AFTER phone' },
+      { name: 'billing_enabled', sql: 'ALTER TABLE customers ADD COLUMN billing_enabled BOOLEAN DEFAULT TRUE AFTER email' },
+      { name: 'status', sql: 'ALTER TABLE customers ADD COLUMN status ENUM(\'Active\', \'Inactive\') DEFAULT \'Active\' AFTER billing_enabled' }
+    ];
+
+    const [columns] = await pool.execute(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS 
+       WHERE TABLE_SCHEMA = DATABASE() 
+       AND TABLE_NAME = 'customers'`
+    );
+    const existingColumns = columns.map(col => col.COLUMN_NAME);
+
+    for (const col of columnsToAdd) {
+      if (!existingColumns.includes(col.name)) {
+        try {
+          await pool.execute(col.sql);
+          console.log(`✅ Added missing column: customers.${col.name}`);
+          
+          // Set default values for new columns
+          if (col.name === 'billing_enabled') {
+            await pool.execute('UPDATE customers SET billing_enabled = TRUE WHERE billing_enabled IS NULL');
+          } else if (col.name === 'status') {
+            await pool.execute('UPDATE customers SET status = \'Active\' WHERE status IS NULL');
+          } else if (col.name === 'contact_person') {
+            await pool.execute('UPDATE customers SET contact_person = name WHERE contact_person IS NULL');
+          }
+        } catch (err) {
+          console.error(`Error adding column ${col.name}:`, err.message);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error ensuring customer columns:', error.message);
+  }
+};
 /**
  * Get all drivers
  */
@@ -76,19 +121,52 @@ const createDriver = async (req, res) => {
     await connection.beginTransaction();
 
     try {
+      // Check which columns exist in users table
+      const [userColumns] = await connection.execute(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS 
+         WHERE TABLE_SCHEMA = DATABASE() 
+         AND TABLE_NAME = 'users'`
+      );
+      const userExistingColumns = userColumns.map(col => col.COLUMN_NAME);
+      
+      // Check which columns exist in drivers table
+      const [driverColumns] = await connection.execute(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS 
+         WHERE TABLE_SCHEMA = DATABASE() 
+         AND TABLE_NAME = 'drivers'`
+      );
+      const driverExistingColumns = driverColumns.map(col => col.COLUMN_NAME);
+
+      // Build user INSERT query dynamically
+      const userInsertCols = ['email', 'password', 'role'];
+      const userInsertVals = [`driver_${user_id_code}@trucking.com`, hashedPin, 'driver'];
+      
+      if (userExistingColumns.includes('company_id')) {
+        userInsertCols.push('company_id');
+        userInsertVals.push(1); // Default company_id if column exists
+      }
+
       // Create user account for driver
       const [userResult] = await connection.execute(
-        'INSERT INTO users (email, password, role) VALUES (?, ?, ?)',
-        [`driver_${user_id_code}@trucking.com`, hashedPin, 'driver']
+        `INSERT INTO users (${userInsertCols.join(', ')}) VALUES (${userInsertVals.map(() => '?').join(', ')})`,
+        userInsertVals
       );
 
       const userId = userResult.insertId;
 
+      // Build driver INSERT query dynamically
+      const driverInsertCols = ['user_id', 'user_id_code', 'name', 'phone', 'default_pay_rate', 'pin'];
+      const driverInsertVals = [userId, user_id_code, name, phone || null, default_pay_rate, hashedPin];
+      
+      if (driverExistingColumns.includes('company_id')) {
+        driverInsertCols.splice(1, 0, 'company_id'); // Insert after user_id
+        driverInsertVals.splice(1, 0, 1); // Default company_id if column exists
+      }
+
       // Create driver record
       await connection.execute(
-        `INSERT INTO drivers (user_id, user_id_code, name, phone, default_pay_rate, pin)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [userId, user_id_code, name, phone || null, default_pay_rate, hashedPin]
+        `INSERT INTO drivers (${driverInsertCols.join(', ')}) VALUES (${driverInsertVals.map(() => '?').join(', ')})`,
+        driverInsertVals
       );
 
       await connection.commit();
@@ -273,6 +351,9 @@ const deleteDriver = async (req, res) => {
  */
 const getAllCustomers = async (req, res) => {
   try {
+    // AUTO-FIX: Ensure all required columns exist
+    await ensureCustomerColumns();
+    
     const [customers] = await pool.execute(
       'SELECT * FROM customers ORDER BY name ASC'
     );
@@ -296,24 +377,37 @@ const getAllCustomers = async (req, res) => {
  */
 const createCustomer = async (req, res) => {
   try {
-    const { name, default_bill_rate } = req.body;
+    // AUTO-FIX: Ensure all required columns exist
+    await ensureCustomerColumns();
+    
+    const { name, contact_person, phone, email, billing_enabled, status, default_bill_rate } = req.body;
 
-    if (!name || default_bill_rate === undefined) {
+    if (!name || !contact_person || !phone || !email || default_bill_rate === undefined) {
       return res.status(400).json({
         success: false,
-        message: 'Name and default bill rate are required'
+        message: 'Name, contact person, phone, email, and default bill rate are required'
       });
     }
 
     const [result] = await pool.execute(
-      'INSERT INTO customers (name, default_bill_rate) VALUES (?, ?)',
-      [name, default_bill_rate]
+      `INSERT INTO customers (name, contact_person, phone, email, billing_enabled, status, default_bill_rate) 
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [name, contact_person, phone, email, billing_enabled !== undefined ? billing_enabled : true, status || 'Active', default_bill_rate]
     );
 
     return res.status(201).json({
       success: true,
       message: 'Customer created successfully',
-      data: { id: result.insertId, name, default_bill_rate }
+      data: { 
+        id: result.insertId, 
+        name, 
+        contact_person, 
+        phone, 
+        email, 
+        billing_enabled: billing_enabled !== undefined ? billing_enabled : true,
+        status: status || 'Active',
+        default_bill_rate 
+      }
     });
   } catch (error) {
     console.error('Error creating customer:', error);
@@ -331,31 +425,72 @@ const createCustomer = async (req, res) => {
 const updateCustomer = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, default_bill_rate } = req.body;
+    const { name, contact_person, phone, email, billing_enabled, status, default_bill_rate } = req.body;
+    
+    // AUTO-FIX: Ensure all required columns exist FIRST
+    await ensureCustomerColumns();
+    
+    // Verify customer exists
+    const [existing] = await pool.execute(
+      'SELECT id FROM customers WHERE id = ?',
+      [id]
+    );
 
+    if (existing.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Customer not found'
+      });
+    }
+
+    // Build update query dynamically - only include fields that are provided
     const updates = [];
     const values = [];
 
-    if (name) {
+    if (name !== undefined) {
       updates.push('name = ?');
       values.push(name);
     }
-
+    if (contact_person !== undefined) {
+      updates.push('contact_person = ?');
+      values.push(contact_person);
+    }
+    if (phone !== undefined) {
+      updates.push('phone = ?');
+      values.push(phone);
+    }
+    if (email !== undefined) {
+      updates.push('email = ?');
+      values.push(email);
+    }
+    if (billing_enabled !== undefined) {
+      updates.push('billing_enabled = ?');
+      values.push(billing_enabled ? 1 : 0);
+    }
+    if (status !== undefined) {
+      updates.push('status = ?');
+      values.push(status);
+    }
     if (default_bill_rate !== undefined) {
       updates.push('default_bill_rate = ?');
       values.push(default_bill_rate);
     }
 
+    // Must have at least one field to update
     if (updates.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'No fields to update'
+        message: 'No fields provided to update'
       });
     }
 
+    // Add updated_at and id
+    updates.push('updated_at = NOW()');
     values.push(id);
+    
+    // Execute update
     await pool.execute(
-      `UPDATE customers SET ${updates.join(', ')}, updated_at = NOW() WHERE id = ?`,
+      `UPDATE customers SET ${updates.join(', ')} WHERE id = ?`,
       values
     );
 
@@ -365,6 +500,20 @@ const updateCustomer = async (req, res) => {
     });
   } catch (error) {
     console.error('Error updating customer:', error);
+    // If column doesn't exist error, try to add it and retry
+    if (error.message.includes('Unknown column')) {
+      try {
+        await ensureCustomerColumns();
+        // Retry the update
+        return updateCustomer(req, res);
+      } catch (retryError) {
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to update customer. Please run ADD_CUSTOMER_COLUMNS.sql migration.',
+          error: error.message
+        });
+      }
+    }
     return res.status(500).json({
       success: false,
       message: 'Failed to update customer',
@@ -379,7 +528,6 @@ const updateCustomer = async (req, res) => {
 const deleteCustomer = async (req, res) => {
   try {
     const { id } = req.params;
-
     await pool.execute('DELETE FROM customers WHERE id = ?', [id]);
 
     return res.json({
@@ -402,7 +550,6 @@ const deleteCustomer = async (req, res) => {
 const getAllTickets = async (req, res) => {
   try {
     const { month, customer, driver, status, search } = req.query;
-
     let query = `
       SELECT t.*, d.name as driver_name, d.user_id_code, c.name as customer_name
       FROM tickets t
@@ -1322,14 +1469,43 @@ const updateBillRates = async (req, res) => {
  */
 const getAllTrucks = async (req, res) => {
   try {
-    const [trucks] = await pool.execute(
-      'SELECT id, truck_number, created_at, updated_at FROM trucks ORDER BY truck_number ASC'
-    );
+    // First try with all columns
+    try {
+      const [trucks] = await pool.execute(
+        `SELECT id, truck_number, truck_type, assigned_customer_id, status, notes, created_at, updated_at 
+         FROM trucks ORDER BY truck_number ASC`
+      );
 
-    return res.json({
-      success: true,
-      data: trucks
-    });
+      return res.json({
+        success: true,
+        data: trucks
+      });
+    } catch (columnError) {
+      // If columns don't exist, try with basic columns only
+      if (columnError.code === 'ER_BAD_FIELD_ERROR' || columnError.message.includes('Unknown column')) {
+        console.log('Some columns missing, fetching with basic columns only');
+        const [trucks] = await pool.execute(
+          `SELECT id, truck_number, created_at, updated_at 
+           FROM trucks ORDER BY truck_number ASC`
+        );
+
+        // Add default values for missing columns
+        const trucksWithDefaults = trucks.map(truck => ({
+          ...truck,
+          truck_type: null,
+          assigned_customer_id: null,
+          status: 'Active',
+          notes: null
+        }));
+
+        return res.json({
+          success: true,
+          data: trucksWithDefaults,
+          message: 'Some columns are missing. Please run ADD_TRUCK_COLUMNS.sql migration.'
+        });
+      }
+      throw columnError;
+    }
   } catch (error) {
     console.error('Error fetching trucks:', error);
     return res.status(500).json({
@@ -1345,12 +1521,28 @@ const getAllTrucks = async (req, res) => {
  */
 const createTruck = async (req, res) => {
   try {
-    const { truck_number } = req.body;
+    const { truck_number, truck_type, assigned_customer_id, status, notes } = req.body;
 
     if (!truck_number || truck_number.trim() === '') {
       return res.status(400).json({
         success: false,
         message: 'Truck number is required'
+      });
+    }
+
+    // Check which columns exist in the database
+    const [columns] = await pool.execute(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS 
+       WHERE TABLE_SCHEMA = DATABASE() 
+       AND TABLE_NAME = 'trucks'`
+    );
+    const existingColumns = columns.map(col => col.COLUMN_NAME);
+
+    // Only require truck_type if the column exists
+    if (existingColumns.includes('truck_type') && !truck_type) {
+      return res.status(400).json({
+        success: false,
+        message: 'Truck type is required'
       });
     }
 
@@ -1367,21 +1559,209 @@ const createTruck = async (req, res) => {
       });
     }
 
+    // Verify customer exists if assigned
+    if (assigned_customer_id) {
+      const [customer] = await pool.execute(
+        'SELECT id FROM customers WHERE id = ?',
+        [assigned_customer_id]
+      );
+      if (customer.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid customer assignment'
+        });
+      }
+    }
+
+    // Build INSERT query dynamically based on existing columns
+    const insertColumns = ['truck_number'];
+    const insertValues = [truck_number.trim()];
+
+    if (existingColumns.includes('truck_type')) {
+      insertColumns.push('truck_type');
+      insertValues.push(truck_type || null);
+    }
+
+    if (existingColumns.includes('assigned_customer_id')) {
+      insertColumns.push('assigned_customer_id');
+      insertValues.push(assigned_customer_id || null);
+    }
+
+    if (existingColumns.includes('status')) {
+      insertColumns.push('status');
+      insertValues.push(status || 'Active');
+    }
+
+    if (existingColumns.includes('notes')) {
+      insertColumns.push('notes');
+      insertValues.push(notes || null);
+    }
+
+    const placeholders = insertValues.map(() => '?').join(', ');
     const [result] = await pool.execute(
-      'INSERT INTO trucks (truck_number) VALUES (?)',
-      [truck_number.trim()]
+      `INSERT INTO trucks (${insertColumns.join(', ')}) VALUES (${placeholders})`,
+      insertValues
     );
 
     return res.status(201).json({
       success: true,
       message: 'Truck added successfully',
-      data: { id: result.insertId, truck_number: truck_number.trim() }
+      data: { 
+        id: result.insertId, 
+        truck_number: truck_number.trim(),
+        truck_type: existingColumns.includes('truck_type') ? truck_type : null,
+        assigned_customer_id: existingColumns.includes('assigned_customer_id') ? (assigned_customer_id || null) : null,
+        status: existingColumns.includes('status') ? (status || 'Active') : 'Active',
+        notes: existingColumns.includes('notes') ? (notes || null) : null
+      }
     });
   } catch (error) {
     console.error('Error creating truck:', error);
+    // If column doesn't exist error, try to add it and retry
+    if (error.message.includes('Unknown column')) {
+      try {
+        // Try to add missing columns
+        const columnsToAdd = [
+          { name: 'truck_type', sql: 'ALTER TABLE trucks ADD COLUMN truck_type ENUM(\'Box Truck\', \'Semi\', \'Pickup\') NULL AFTER truck_number' },
+          { name: 'assigned_customer_id', sql: 'ALTER TABLE trucks ADD COLUMN assigned_customer_id INT NULL AFTER truck_type' },
+          { name: 'status', sql: 'ALTER TABLE trucks ADD COLUMN status ENUM(\'Active\', \'Inactive\') DEFAULT \'Active\' AFTER assigned_customer_id' },
+          { name: 'notes', sql: 'ALTER TABLE trucks ADD COLUMN notes TEXT NULL AFTER status' }
+        ];
+
+        const [columns] = await pool.execute(
+          `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS 
+           WHERE TABLE_SCHEMA = DATABASE() 
+           AND TABLE_NAME = 'trucks'`
+        );
+        const existingCols = columns.map(col => col.COLUMN_NAME);
+
+        for (const col of columnsToAdd) {
+          if (!existingCols.includes(col.name)) {
+            try {
+              await pool.execute(col.sql);
+              console.log(`✅ Added missing column: trucks.${col.name}`);
+            } catch (addError) {
+              console.error(`Error adding column ${col.name}:`, addError.message);
+            }
+          }
+        }
+
+        // Retry the insert
+        return createTruck(req, res);
+      } catch (retryError) {
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to create truck. Please run ADD_TRUCK_COLUMNS.sql migration.',
+          error: error.message
+        });
+      }
+    }
     return res.status(500).json({
       success: false,
       message: 'Failed to create truck',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Update a truck
+ */
+const updateTruck = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { truck_number, truck_type, assigned_customer_id, status, notes } = req.body;
+    // Verify truck exists
+    const [existing] = await pool.execute(
+      'SELECT id FROM trucks WHERE id = ?',
+      [id]
+    );
+
+    if (existing.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Truck not found'
+      });
+    }
+
+    // Check if truck number already exists for another truck
+    if (truck_number) {
+      const [duplicate] = await pool.execute(
+        'SELECT id FROM trucks WHERE truck_number = ? AND id != ?',
+        [truck_number.trim(), id]
+      );
+      if (duplicate.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Truck number already exists'
+        });
+      }
+    }
+
+    // Verify customer exists if assigned
+    if (assigned_customer_id) {
+      const [customer] = await pool.execute(
+        'SELECT id FROM customers WHERE id = ?',
+        [assigned_customer_id]
+      );
+      if (customer.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid customer assignment'
+        });
+      }
+    }
+
+    const updates = [];
+    const values = [];
+
+    if (truck_number !== undefined) {
+      updates.push('truck_number = ?');
+      values.push(truck_number.trim());
+    }
+
+    if (truck_type !== undefined) {
+      updates.push('truck_type = ?');
+      values.push(truck_type);
+    }
+
+    if (assigned_customer_id !== undefined) {
+      updates.push('assigned_customer_id = ?');
+      values.push(assigned_customer_id || null);
+    }
+
+    if (status !== undefined) {
+      updates.push('status = ?');
+      values.push(status);
+    }
+
+    if (notes !== undefined) {
+      updates.push('notes = ?');
+      values.push(notes || null);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No fields to update'
+      });
+    }
+
+    values.push(id);
+    await pool.execute(
+      `UPDATE trucks SET ${updates.join(', ')}, updated_at = NOW() WHERE id = ?`,
+      values
+    );
+
+    return res.json({
+      success: true,
+      message: 'Truck updated successfully'
+    });
+  } catch (error) {
+    console.error('Error updating truck:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update truck',
       error: error.message
     });
   }
@@ -1430,6 +1810,195 @@ const deleteTruck = async (req, res) => {
   }
 };
 
+/**
+ * Get all companies
+ */
+const getAllCompanies = async (req, res) => {
+  try {
+    const [companies] = await pool.execute(
+      'SELECT id, name, created_at, updated_at FROM companies ORDER BY name ASC'
+    );
+
+    return res.json({
+      success: true,
+      data: companies
+    });
+  } catch (error) {
+    console.error('Error fetching companies:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch companies',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Create a new company
+ */
+const createCompany = async (req, res) => {
+  try {
+    const { name } = req.body;
+
+    if (!name || name.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Company name is required'
+      });
+    }
+
+    // Check if company name already exists
+    const [existing] = await pool.execute(
+      'SELECT id FROM companies WHERE name = ?',
+      [name.trim()]
+    );
+
+    if (existing.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Company name already exists'
+      });
+    }
+
+    const [result] = await pool.execute(
+      'INSERT INTO companies (name) VALUES (?)',
+      [name.trim()]
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: 'Company created successfully',
+      data: { id: result.insertId, name: name.trim() }
+    });
+  } catch (error) {
+    console.error('Error creating company:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to create company',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Update a company
+ */
+const updateCompany = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body;
+
+    if (!name || name.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Company name is required'
+      });
+    }
+
+    // Check if company exists
+    const [existing] = await pool.execute(
+      'SELECT id FROM companies WHERE id = ?',
+      [id]
+    );
+
+    if (existing.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Company not found'
+      });
+    }
+
+    // Check if name already exists for another company
+    const [nameExists] = await pool.execute(
+      'SELECT id FROM companies WHERE name = ? AND id != ?',
+      [name.trim(), id]
+    );
+
+    if (nameExists.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Company name already exists'
+      });
+    }
+
+    await pool.execute(
+      'UPDATE companies SET name = ?, updated_at = NOW() WHERE id = ?',
+      [name.trim(), id]
+    );
+
+    return res.json({
+      success: true,
+      message: 'Company updated successfully'
+    });
+  } catch (error) {
+    console.error('Error updating company:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update company',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Delete a company
+ */
+const deleteCompany = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Check if company exists
+    const [company] = await pool.execute(
+      'SELECT id, name FROM companies WHERE id = ?',
+      [id]
+    );
+
+    if (company.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Company not found'
+      });
+    }
+
+    // Check if company has any users/drivers/customers/trucks/tickets
+    const [users] = await pool.execute('SELECT COUNT(*) as count FROM users', []);
+    const [drivers] = await pool.execute('SELECT COUNT(*) as count FROM drivers', []);
+    const [customers] = await pool.execute('SELECT COUNT(*) as count FROM customers', []);
+    const [trucks] = await pool.execute('SELECT COUNT(*) as count FROM trucks', []);
+    const [tickets] = await pool.execute('SELECT COUNT(*) as count FROM tickets', []);
+
+    const totalRecords = parseInt(users[0].count) + parseInt(drivers[0].count) + parseInt(customers[0].count) + parseInt(trucks[0].count) + parseInt(tickets[0].count);
+
+    if (totalRecords > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot delete company. It has associated users, drivers, customers, trucks, or tickets. Please delete all associated data first.',
+        details: {
+          users: parseInt(users[0].count),
+          drivers: parseInt(drivers[0].count),
+          customers: parseInt(customers[0].count),
+          trucks: parseInt(trucks[0].count),
+          tickets: parseInt(tickets[0].count)
+        }
+      });
+    }
+
+    await pool.execute('DELETE FROM companies WHERE id = ?', [id]);
+
+    return res.json({
+      success: true,
+      message: 'Company deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting company:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to delete company',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   getAllDrivers,
   createDriver,
@@ -1452,6 +2021,11 @@ module.exports = {
   updateBillRates,
   getAllTrucks,
   createTruck,
-  deleteTruck
+  updateTruck,
+  deleteTruck,
+  getAllCompanies,
+  createCompany,
+  updateCompany,
+  deleteCompany
 };
 

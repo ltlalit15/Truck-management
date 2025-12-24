@@ -56,11 +56,16 @@ router.get('/pay/:month', driverController.getPayByMonth);
 // Customer list (for dropdown in Add Ticket)
 router.get('/customers', driverController.getCustomers);
 router.get('/customers/available', driverController.getAllAvailableCustomers);
-router.post('/customers', driverController.addCustomer);
+router.post('/customers', driverController.addNewCustomer); // Add new customer from keyboard
+router.post('/customers/assign', driverController.addCustomer); // Assign existing customer to driver
 router.delete('/customers/:customer_id', driverController.removeCustomer);
 
 // Trucks list (for dropdown)
 router.get('/trucks', driverController.getTrucks);
+router.post('/trucks', driverController.addTruck);
+
+// Equipment types list (for dropdown)
+router.get('/equipment-types', driverController.getEquipmentTypes);
 
 module.exports = router;
 

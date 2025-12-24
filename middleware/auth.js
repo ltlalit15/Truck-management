@@ -29,7 +29,7 @@ const authenticate = async (req, res, next) => {
 
     // Get user from database to ensure they still exist
     const [users] = await pool.execute(
-      'SELECT id, email, role FROM users WHERE id = ?',
+      'SELECT id, email, role, company_id FROM users WHERE id = ?',
       [decoded.userId]
     );
 
@@ -40,11 +40,16 @@ const authenticate = async (req, res, next) => {
       });
     }
 
+    // Use company_id from token if available, otherwise from database
+    const companyId = decoded.companyId || users[0].company_id;
+
     // Attach user info to request
     req.user = {
       id: users[0].id,
       email: users[0].email,
-      role: users[0].role
+      role: users[0].role,
+      companyId: companyId,
+      driverId: decoded.driverId || null
     };
 
     next();
@@ -85,6 +90,36 @@ const isAdmin = (req, res, next) => {
 };
 
 /**
+ * Middleware to check if user is company admin
+ * Must be used after authenticate middleware
+ */
+const isCompany = (req, res, next) => {
+  if (req.user && req.user.role === 'company') {
+    next();
+  } else {
+    return res.status(403).json({
+      success: false,
+      message: 'Access denied. Company admin role required.'
+    });
+  }
+};
+
+/**
+ * Middleware to check if user is admin or company
+ * Must be used after authenticate middleware
+ */
+const isAdminOrCompany = (req, res, next) => {
+  if (req.user && (req.user.role === 'admin' || req.user.role === 'company')) {
+    next();
+  } else {
+    return res.status(403).json({
+      success: false,
+      message: 'Access denied. Admin or Company admin role required.'
+    });
+  }
+};
+
+/**
  * Middleware to check if user is driver
  * Must be used after authenticate middleware
  */
@@ -102,6 +137,8 @@ const isDriver = (req, res, next) => {
 module.exports = {
   authenticate,
   isAdmin,
-  isDriver
+  isDriver,
+  isCompany,
+  isAdminOrCompany
 };
 

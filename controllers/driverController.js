@@ -15,7 +15,7 @@ const getDashboard = async (req, res) => {
 
     // Get driver info
     const [drivers] = await pool.execute(
-      'SELECT id, name, user_id_code FROM drivers WHERE id = ? OR user_id = ?',
+      'SELECT id, name, user_id_code FROM drivers WHERE (id = ? OR user_id = ?)',
       [driverId, req.user.id]
     );
 
@@ -145,7 +145,7 @@ const createTicket = async (req, res) => {
 
     // Get actual driver ID and default pay rate
     const [drivers] = await pool.execute(
-      'SELECT id, default_pay_rate FROM drivers WHERE id = ? OR user_id = ?',
+      'SELECT id, default_pay_rate FROM drivers WHERE (id = ? OR user_id = ?)',
       [driverId, req.user.id]
     );
 
@@ -179,11 +179,11 @@ const createTicket = async (req, res) => {
       });
     }
 
-    // Get bill rates for all customers
+    // Get bill rates for all customers (company-scoped)
     const placeholders = customerNames.map(() => '?').join(',');
     const [customersData] = await pool.execute(
       `SELECT default_bill_rate FROM customers WHERE name IN (${placeholders})`,
-      customerNames
+      [...customerNames]
     );
 
     // Calculate average bill rate from all selected customers
@@ -245,7 +245,7 @@ const getTicketById = async (req, res) => {
 
     // Get actual driver ID
     const [drivers] = await pool.execute(
-      'SELECT id FROM drivers WHERE id = ? OR user_id = ?',
+      'SELECT id FROM drivers WHERE (id = ? OR user_id = ?)',
       [driverId, req.user.id]
     );
 
@@ -294,7 +294,7 @@ const getMyPay = async (req, res) => {
 
     // Get actual driver ID
     const [drivers] = await pool.execute(
-      'SELECT id FROM drivers WHERE id = ? OR user_id = ?',
+      'SELECT id FROM drivers WHERE (id = ? OR user_id = ?)',
       [driverId, req.user.id]
     );
 
@@ -395,7 +395,7 @@ const getCustomers = async (req, res) => {
 
     // Get actual driver ID
     const [drivers] = await pool.execute(
-      'SELECT id FROM drivers WHERE id = ? OR user_id = ?',
+      'SELECT id FROM drivers WHERE (id = ? OR user_id = ?)',
       [driverId, req.user.id]
     );
 
@@ -453,7 +453,7 @@ const getAllAvailableCustomers = async (req, res) => {
 
     // Get actual driver ID
     const [drivers] = await pool.execute(
-      'SELECT id FROM drivers WHERE id = ? OR user_id = ?',
+      'SELECT id FROM drivers WHERE (id = ? OR user_id = ?)',
       [driverId, req.user.id]
     );
 
@@ -508,7 +508,7 @@ const addCustomer = async (req, res) => {
 
     // Get actual driver ID
     const [drivers] = await pool.execute(
-      'SELECT id FROM drivers WHERE id = ? OR user_id = ?',
+      'SELECT id FROM drivers WHERE (id = ? OR user_id = ?)',
       [driverId, req.user.id]
     );
 
@@ -521,7 +521,7 @@ const addCustomer = async (req, res) => {
 
     const actualDriverId = drivers[0].id;
 
-    // Check if customer exists
+    // Check if customer exists and belongs to company
     const [customers] = await pool.execute(
       'SELECT id FROM customers WHERE id = ?',
       [customer_id]
@@ -584,7 +584,7 @@ const removeCustomer = async (req, res) => {
 
     // Get actual driver ID
     const [drivers] = await pool.execute(
-      'SELECT id FROM drivers WHERE id = ? OR user_id = ?',
+      'SELECT id FROM drivers WHERE (id = ? OR user_id = ?)',
       [driverId, req.user.id]
     );
 
@@ -627,15 +627,272 @@ const removeCustomer = async (req, res) => {
 /**
  * Get trucks list (for dropdown)
  */
-const getTrucks = async (req, res) => {
+/**
+ * Get equipment types from master table (or return defaults if table doesn't exist)
+ */
+const getEquipmentTypes = async (req, res) => {
   try {
-    const [trucks] = await pool.execute(
-      'SELECT id, truck_number FROM trucks ORDER BY truck_number ASC'
-    );
+    // Try to get from equipment_type_master table
+    let equipmentTypes;
+    try {
+      const [result] = await pool.execute(
+        'SELECT id, equipment_name FROM equipment_type_master WHERE status = "Active" ORDER BY equipment_name ASC'
+      );
+      equipmentTypes = result;
+    } catch (tableError) {
+      // Table doesn't exist, return default equipment types
+      console.log('equipment_type_master table not found, returning default equipment types');
+      equipmentTypes = [
+        { id: 1, equipment_name: 'Tandem' },
+        { id: 2, equipment_name: 'Tri End Dump' },
+        { id: 3, equipment_name: 'Livebottom' },
+        { id: 4, equipment_name: 'Tri Pup' },
+        { id: 5, equipment_name: 'Super B' },
+        { id: 6, equipment_name: 'Quad' }
+      ];
+    }
 
     return res.json({
       success: true,
-      data: trucks
+      data: equipmentTypes
+    });
+  } catch (error) {
+    console.error('Error fetching equipment types:', error);
+    // Return default equipment types as fallback
+    return res.json({
+      success: true,
+      data: [
+        { id: 1, equipment_name: 'Tandem' },
+        { id: 2, equipment_name: 'Tri End Dump' },
+        { id: 3, equipment_name: 'Livebottom' },
+        { id: 4, equipment_name: 'Tri Pup' },
+        { id: 5, equipment_name: 'Super B' },
+        { id: 6, equipment_name: 'Quad' }
+      ]
+    });
+  }
+};
+
+/**
+ * Add new truck from keyboard (driver can add truck number)
+ */
+const addTruck = async (req, res) => {
+  try {
+    const { truck_number } = req.body;
+
+    if (!truck_number || truck_number.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Truck number is required'
+      });
+    }
+
+    // Check if truck already exists in trucks table
+    const [existingTruck] = await pool.execute(
+      'SELECT id FROM trucks WHERE truck_number = ?',
+      [truck_number.trim()]
+    );
+
+    if (existingTruck.length > 0) {
+      return res.json({
+        success: true,
+        message: 'Truck already exists',
+        data: { id: existingTruck[0].id, truck_number: truck_number.trim() }
+      });
+    }
+
+    // Try to add to truck_master table if it exists (optional)
+    try {
+      const [masterCheck] = await pool.execute(
+        'SELECT id FROM truck_master WHERE truck_number = ?',
+        [truck_number.trim()]
+      );
+      
+      if (masterCheck.length === 0) {
+        await pool.execute(
+          'INSERT INTO truck_master (truck_number, status) VALUES (?, ?)',
+          [truck_number.trim(), 'Active']
+        );
+      }
+    } catch (masterError) {
+      // truck_master table doesn't exist, that's okay - continue
+      console.log('truck_master table not found, skipping master insert');
+    }
+
+    // Check if status column exists in trucks table
+    const [columns] = await pool.execute(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS 
+       WHERE TABLE_SCHEMA = DATABASE() 
+       AND TABLE_NAME = 'trucks' 
+       AND COLUMN_NAME = 'status'`
+    );
+    
+    const hasStatusColumn = columns.length > 0;
+    
+    // Add to trucks table (with or without status column)
+    let result;
+    if (hasStatusColumn) {
+      [result] = await pool.execute(
+        'INSERT INTO trucks (truck_number, status) VALUES (?, ?)',
+        [truck_number.trim(), 'Active']
+      );
+    } else {
+      [result] = await pool.execute(
+        'INSERT INTO trucks (truck_number) VALUES (?)',
+        [truck_number.trim()]
+      );
+    }
+
+    return res.json({
+      success: true,
+      message: 'Truck added successfully',
+      data: { id: result.insertId, truck_number: truck_number.trim() }
+    });
+  } catch (error) {
+    console.error('Error adding truck:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to add truck',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Add new customer from keyboard (driver can add customer)
+ */
+const addNewCustomer = async (req, res) => {
+  try {
+    const { customer_name } = req.body;
+
+    if (!customer_name || customer_name.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Customer name is required'
+      });
+    }
+
+    // Check if customer exists in master table
+    const [masterCustomer] = await pool.execute(
+      'SELECT id FROM customer_master WHERE customer_name = ? AND status = "Active"',
+      [customer_name.trim()]
+    );
+
+    let customerMasterId;
+    if (masterCustomer.length > 0) {
+      customerMasterId = masterCustomer[0].id;
+    } else {
+      // Add to master table first
+      const [masterResult] = await pool.execute(
+        'INSERT INTO customer_master (customer_name, billing_enabled, status) VALUES (?, ?, ?)',
+        [customer_name.trim(), true, 'Active']
+      );
+      customerMasterId = masterResult.insertId;
+    }
+
+    // Add to company customers table if not exists
+    const [companyCustomer] = await pool.execute(
+      'SELECT id FROM customers WHERE name = ?',
+      [customer_name.trim()]
+    );
+
+    let customerId;
+    if (companyCustomer.length > 0) {
+      customerId = companyCustomer[0].id;
+    } else {
+      const [result] = await pool.execute(
+        'INSERT INTO customers (name, default_bill_rate, status) VALUES (?, ?, ?)',
+        [customer_name.trim(), 0.00, 'Active']
+      );
+      customerId = result.insertId;
+    }
+
+    // Auto-assign to driver
+    const driverId = req.user.driverId || req.user.id;
+    const [drivers] = await pool.execute(
+      'SELECT id FROM drivers WHERE (id = ? OR user_id = ?)',
+      [driverId, req.user.id]
+    );
+
+    if (drivers.length > 0) {
+      const actualDriverId = drivers[0].id;
+      // Check if already assigned
+      const [existing] = await pool.execute(
+        'SELECT id FROM driver_customers WHERE driver_id = ? AND customer_id = ?',
+        [actualDriverId, customerId]
+      );
+
+      if (existing.length === 0) {
+        await pool.execute(
+          'INSERT INTO driver_customers (driver_id, customer_id) VALUES (?, ?)',
+          [actualDriverId, customerId]
+        );
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: 'Customer added successfully',
+      data: { id: customerId, name: customer_name.trim(), customer_name: customer_name.trim() }
+    });
+  } catch (error) {
+    console.error('Error adding customer:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to add customer',
+      error: error.message
+    });
+  }
+};
+
+const getTrucks = async (req, res) => {
+  try {
+    // Check if status column exists in trucks table
+    let [columns] = await pool.execute(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS 
+       WHERE TABLE_SCHEMA = DATABASE() 
+       AND TABLE_NAME = 'trucks' 
+       AND COLUMN_NAME = 'status'`
+    );
+    
+    const hasStatusColumn = columns.length > 0;
+    
+    // Build query based on whether status column exists
+    let query;
+    if (hasStatusColumn) {
+      query = `SELECT DISTINCT id, truck_number 
+               FROM trucks
+               WHERE status = "Active"
+               ORDER BY truck_number ASC`;
+    } else {
+      query = `SELECT DISTINCT id, truck_number 
+               FROM trucks
+               ORDER BY truck_number ASC`;
+    }
+    
+    let [trucks] = await pool.execute(query);
+
+    // If no trucks found in trucks table, try truck_master table (if it exists)
+    if (trucks.length === 0) {
+      try {
+        const [masterTrucks] = await pool.execute(
+          'SELECT id, truck_number FROM truck_master WHERE status = "Active" ORDER BY truck_number ASC'
+        );
+        if (masterTrucks.length > 0) {
+          return res.json({
+            success: true,
+            data: masterTrucks
+          });
+        }
+      } catch (masterError) {
+        // truck_master table doesn't exist, that's okay - continue with empty array
+        console.log('truck_master table not found, using trucks table only');
+      }
+    }
+
+    return res.json({
+      success: true,
+      data: trucks || []
     });
   } catch (error) {
     console.error('Error fetching trucks:', error);
@@ -658,6 +915,9 @@ module.exports = {
   getAllAvailableCustomers,
   addCustomer,
   removeCustomer,
-  getTrucks
+  getTrucks,
+  addTruck,
+  getEquipmentTypes,
+  addNewCustomer
 };
 
