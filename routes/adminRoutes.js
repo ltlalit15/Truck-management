@@ -67,6 +67,7 @@ router.get('/dashboard/stats', adminController.getDashboardStats);
 // Invoice routes
 router.get('/invoices/generate', adminController.generateInvoice);
 router.get('/invoices/download/:customerId', adminController.downloadInvoice);
+router.post('/invoices/send', adminController.sendInvoiceEmailHandler);
 
 // Settlement routes
 router.get('/settlements/generate', adminController.generateSettlement);
