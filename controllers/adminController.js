@@ -1187,18 +1187,6 @@ const downloadInvoice = async (req, res) => {
       yPos -= 16;
     });
     
-    // GST Number - Always display (use customer GST or default)
-    yPos -= 6;
-    const gstNumberToDisplay = customerGstNumber || '818440612RT0001';
-    currentPage.drawText(`GST #: ${gstNumberToDisplay}`, {
-      x: billToX,
-      y: yPos,
-      size: 11,
-      font: boldFont,
-      color: primaryColor,
-    });
-    yPos -= 18;
-    
     // Period with formatted dates
     const formatPeriodDate = (dateStr) => {
       if (!dateStr) return '';
@@ -1500,8 +1488,19 @@ const downloadInvoice = async (req, res) => {
     currentPage.drawText('GST (5%):', { x: totalsX, y: yPos, size: 11, font });
     const gstText = `$${gst.toFixed(2)}`;
     currentPage.drawText(gstText, { x: totalsRightX, y: yPos, size: 11, font });
+    
+    // Company GST Number below GST (5%) - properly aligned
+    yPos -= 18;
+    const companyGstNumber = '818440612RT0001';
+    currentPage.drawText(`GST #: ${companyGstNumber}`, {
+      x: totalsX,
+      y: yPos,
+      size: 10,
+      font: font,
+      color: rgb(0.5, 0.5, 0.5),
+    });
 
-    yPos -= 28;
+    yPos -= 10;
     // Draw line above total
     currentPage.drawRectangle({
       x: totalsX - 15,
@@ -1816,17 +1815,6 @@ const generateInvoicePDFBuffer = async ({
       currentPage.drawText(line, { x: billToX, y: yPos, size: 11, font });
       yPos -= 16;
     });
-    // GST Number - Always display (use customer GST or default)
-    yPos -= 6;
-    const gstNumberToDisplay = customerGstNumber || '818440612RT0001';
-    currentPage.drawText(`GST #: ${gstNumberToDisplay}`, {
-      x: billToX,
-      y: yPos,
-      size: 11,
-      font: boldFont,
-      color: primaryColor,
-    });
-    yPos -= 18;
     const formatPeriodDate = (dateStr) => {
       if (!dateStr) return '';
       const date = new Date(dateStr);
@@ -2078,7 +2066,19 @@ const generateInvoicePDFBuffer = async ({
     // GST
     currentPage.drawText('GST (5%):', { x: totalsX, y: yPos, size: 11, font });
     currentPage.drawText(`$${gst.toFixed(2)}`, { x: totalsRightX, y: yPos, size: 11, font });
-    yPos -= 28;
+    
+    // Company GST Number below GST (5%) - properly aligned
+    yPos -= 18;
+    const companyGstNumber = '818440612RT0001';
+    currentPage.drawText(`GST #: ${companyGstNumber}`, {
+      x: totalsX,
+      y: yPos,
+      size: 10,
+      font: font,
+      color: rgb(0.5, 0.5, 0.5),
+    });
+    
+    yPos -= 10;
     
     // Draw line above total
     currentPage.drawRectangle({
