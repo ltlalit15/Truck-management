@@ -1231,7 +1231,7 @@ const downloadInvoice = async (req, res) => {
     });
     
     // Header labels - use full text, columns are wide enough
-    const headerLabels = ['Date', 'Ticket #', 'Description', 'Driver', 'Subcontractor', 'Qty', 'Rate', 'Total'];
+    const headerLabels = ['Date', 'Ticket #:', 'Description', 'Driver', 'Subcontractor', 'Qty', 'Rate', 'Total'];
     let xPos = tableStartX + colSpacing;
     headerLabels.forEach((header, index) => {
       // Left-align headers with consistent padding
@@ -1486,8 +1486,8 @@ const downloadInvoice = async (req, res) => {
     yPos -= 22;
     // GST
     const companyGstNumber = '818440612RT0001';
-    currentPage.drawText('GST (5%):', { x: totalsX, y: yPos, size: 11, font });
-    currentPage.drawText(`#${companyGstNumber}`, { x: totalsX + 55, y: yPos, size: 9, font, color: rgb(0.4, 0.4, 0.4) });
+    currentPage.drawText('GST (5%)', { x: totalsX, y: yPos, size: 11, font });
+    currentPage.drawText(`#: ${companyGstNumber}`, { x: totalsX + 55, y: yPos, size: 9, font, color: rgb(0.4, 0.4, 0.4) });
     const gstText = `$${gst.toFixed(2)}`;
     currentPage.drawText(gstText, { x: totalsRightX, y: yPos, size: 11, font });
 
@@ -1848,7 +1848,7 @@ const generateInvoicePDFBuffer = async ({
     });
     
     // Header labels - use full text, columns are wide enough
-    const headerLabels = ['Date', 'Ticket #', 'Description', 'Driver', 'Subcontractor', 'Qty', 'Rate', 'Total'];
+    const headerLabels = ['Date', 'Ticket #:', 'Description', 'Driver', 'Subcontractor', 'Qty', 'Rate', 'Total'];
     let xPos = tableStartX + colSpacing;
     headerLabels.forEach((header, index) => {
       // Left-align headers with consistent padding
@@ -2056,8 +2056,8 @@ const generateInvoicePDFBuffer = async ({
     
     // GST
     const companyGstNumber = '818440612RT0001';
-    currentPage.drawText('GST (5%):', { x: totalsX, y: yPos, size: 11, font });
-    currentPage.drawText(`#${companyGstNumber}`, { x: totalsX + 55, y: yPos, size: 9, font, color: rgb(0.4, 0.4, 0.4) });
+    currentPage.drawText('GST (5%)', { x: totalsX, y: yPos, size: 11, font });
+    currentPage.drawText(`#: ${companyGstNumber}`, { x: totalsX + 55, y: yPos, size: 9, font, color: rgb(0.4, 0.4, 0.4) });
     currentPage.drawText(`$${gst.toFixed(2)}`, { x: totalsRightX, y: yPos, size: 11, font });
     
     yPos -= 22;
@@ -2346,7 +2346,7 @@ const downloadSettlement = async (req, res) => {
         color: primaryColor,
       });
 
-      const headerLabels = ['Date', 'Ticket #', 'Description', 'Driver', 'Subcontractor', 'Qty', 'Rate', 'Total'];
+      const headerLabels = ['Date', 'Ticket #:', 'Description', 'Driver', 'Subcontractor', 'Qty', 'Rate', 'Total'];
       let xPos = tableStartX + colSpacing;
       headerLabels.forEach((header, index) => {
         currentPage.drawText(header, {
@@ -2425,8 +2425,8 @@ const downloadSettlement = async (req, res) => {
       yPos -= 22;
       // GST with number
       const companyGstNumber = '818440612RT0001';
-      currentPage.drawText('GST (5%):', { x: totalsX, y: yPos, size: 11, font });
-      currentPage.drawText(`#${companyGstNumber}`, { x: totalsX + 55, y: yPos, size: 9, font, color: rgb(0.4, 0.4, 0.4) });
+      currentPage.drawText('GST (5%)', { x: totalsX, y: yPos, size: 11, font });
+      currentPage.drawText(`#: ${companyGstNumber}`, { x: totalsX + 55, y: yPos, size: 9, font, color: rgb(0.4, 0.4, 0.4) });
       currentPage.drawText(`$${customerGst.toFixed(2)}`, { x: totalsRightX, y: yPos, size: 11, font });
 
       yPos -= 22;
