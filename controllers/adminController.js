@@ -1485,22 +1485,13 @@ const downloadInvoice = async (req, res) => {
 
     yPos -= 22;
     // GST
+    const companyGstNumber = '818440612RT0001';
     currentPage.drawText('GST (5%):', { x: totalsX, y: yPos, size: 11, font });
+    currentPage.drawText(`#${companyGstNumber}`, { x: totalsX + 55, y: yPos, size: 9, font, color: rgb(0.4, 0.4, 0.4) });
     const gstText = `$${gst.toFixed(2)}`;
     currentPage.drawText(gstText, { x: totalsRightX, y: yPos, size: 11, font });
-    
-    // Company GST Number below GST (5%) - properly aligned
-    yPos -= 18;
-    const companyGstNumber = '818440612RT0001';
-    currentPage.drawText(`GST #: ${companyGstNumber}`, {
-      x: totalsX,
-      y: yPos,
-      size: 10,
-      font: font,
-      color: rgb(0.5, 0.5, 0.5),
-    });
 
-    yPos -= 10;
+    yPos -= 22;
     // Draw line above total
     currentPage.drawRectangle({
       x: totalsX - 15,
@@ -2064,21 +2055,12 @@ const generateInvoicePDFBuffer = async ({
     yPos -= 22;
     
     // GST
+    const companyGstNumber = '818440612RT0001';
     currentPage.drawText('GST (5%):', { x: totalsX, y: yPos, size: 11, font });
+    currentPage.drawText(`#${companyGstNumber}`, { x: totalsX + 55, y: yPos, size: 9, font, color: rgb(0.4, 0.4, 0.4) });
     currentPage.drawText(`$${gst.toFixed(2)}`, { x: totalsRightX, y: yPos, size: 11, font });
     
-    // Company GST Number below GST (5%) - properly aligned
-    yPos -= 18;
-    const companyGstNumber = '818440612RT0001';
-    currentPage.drawText(`GST #: ${companyGstNumber}`, {
-      x: totalsX,
-      y: yPos,
-      size: 10,
-      font: font,
-      color: rgb(0.5, 0.5, 0.5),
-    });
-    
-    yPos -= 10;
+    yPos -= 22;
     
     // Draw line above total
     currentPage.drawRectangle({
@@ -2248,51 +2230,300 @@ const downloadSettlement = async (req, res) => {
     const driver = drivers[0];
     const filename = `Settlement-${driver.user_id_code}-${startDate}-${endDate}.pdf`;
 
-    // ✅ DISABLE CACHING
+    // Get tickets for driver grouped by customer
+    const [tickets] = await pool.execute(
+      `SELECT t.*, c.name as customer_name
+       FROM tickets t
+       LEFT JOIN customers c ON t.customer = c.name
+       WHERE t.driver_id = ?
+       AND t.date >= ? AND t.date <= ?
+       ORDER BY c.name, t.date ASC`,
+      [driverId, startDate, endDate]
+    );
+
+    // Group tickets by customer
+    const customerGroups = {};
+    tickets.forEach(ticket => {
+      const custName = ticket.customer_name || ticket.customer || 'Unknown';
+      if (!customerGroups[custName]) {
+        customerGroups[custName] = [];
+      }
+      customerGroups[custName].push(ticket);
+    });
+
+    // Generate PDF - Invoice style
+    const pdfDoc = await PDFDocument.create();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const primaryColor = rgb(0.16, 0.36, 0.32);
+    const margin = 50;
+    const topMargin = 50;
+    
+    let grandTotalPay = 0;
+    const customerEntries = Object.entries(customerGroups);
+
+    // Format date helper
+    const formatDate = (dateStr) => {
+      if (!dateStr) return '-';
+      const date = new Date(dateStr);
+      if (isNaN(date.getTime())) return dateStr;
+      return `${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}/${date.getFullYear()}`;
+    };
+
+    // Each customer gets their own page (like invoice)
+    for (let custIndex = 0; custIndex < customerEntries.length; custIndex++) {
+      const [customerName, custTickets] = customerEntries[custIndex];
+      
+      // New page for each customer
+      let currentPage = pdfDoc.addPage([612, 792]);
+      const pageSize = currentPage.getSize();
+      const width = pageSize.width;
+      const height = pageSize.height;
+      let yPos = height - topMargin;
+
+      // Calculate customer totals
+      const customerSubtotal = custTickets.reduce((sum, t) => sum + parseFloat(t.total_bill || 0), 0);
+      const customerGst = customerSubtotal * 0.05;
+      const customerTotal = customerSubtotal + customerGst;
+      const customerPay = custTickets.reduce((sum, t) => sum + parseFloat(t.total_pay || 0), 0);
+      grandTotalPay += customerPay;
+
+      // Header - INVOICE style
+      currentPage.drawText('INVOICE', {
+        x: margin,
+        y: yPos,
+        size: 32,
+        font: boldFont,
+        color: primaryColor,
+      });
+
+      // Invoice metadata
+      const invoiceNumber = `INV-${custIndex + 1}-${Date.now().toString().slice(-6)}`;
+      const today = new Date();
+      const invoiceDate = `${String(today.getMonth() + 1).padStart(2, '0')}/${String(today.getDate()).padStart(2, '0')}/${today.getFullYear()}`;
+      yPos -= 35;
+      currentPage.drawText(`Invoice #: ${invoiceNumber}`, { x: margin, y: yPos, size: 11, font });
+      yPos -= 18;
+      currentPage.drawText(`Date of Issue: ${invoiceDate}`, { x: margin, y: yPos, size: 11, font });
+
+      // Bill To Section (Right aligned)
+      const billToX = width - 260;
+      let billToY = height - topMargin;
+      currentPage.drawText('Bill To:', {
+        x: billToX,
+        y: billToY,
+        size: 13,
+        font: boldFont,
+        color: primaryColor,
+      });
+      billToY -= 20;
+      currentPage.drawText(customerName, { x: billToX, y: billToY, size: 11, font });
+      billToY -= 18;
+      currentPage.drawText(`Period: ${formatDate(startDate)} to ${formatDate(endDate)}`, {
+        x: billToX,
+        y: billToY,
+        size: 10,
+        font: font,
+        color: rgb(0.5, 0.5, 0.5),
+      });
+
+      // Table Header
+      yPos = height - 200;
+      const rowHeight = 26;
+      const colWidths = [70, 60, 100, 70, 85, 45, 55, 65];
+      const colSpacing = 3;
+      const totalColWidths = colWidths.reduce((sum, w) => sum + w, 0);
+      const totalSpacing = colSpacing * (colWidths.length + 1);
+      const actualTableWidth = totalColWidths + totalSpacing;
+      const tableStartX = (width - actualTableWidth) / 2;
+
+      // Header background
+      currentPage.drawRectangle({
+        x: tableStartX,
+        y: yPos - 22,
+        width: actualTableWidth,
+        height: rowHeight,
+        color: primaryColor,
+      });
+
+      const headerLabels = ['Date', 'Ticket #', 'Description', 'Driver', 'Subcontractor', 'Qty', 'Rate', 'Total'];
+      let xPos = tableStartX + colSpacing;
+      headerLabels.forEach((header, index) => {
+        currentPage.drawText(header, {
+          x: xPos + 2,
+          y: yPos - 5,
+          size: 9,
+          font: boldFont,
+          color: rgb(1, 1, 1),
+        });
+        xPos += colWidths[index] + colSpacing;
+      });
+
+      yPos -= rowHeight + 8;
+
+      // Table rows
+      for (const ticket of custTickets) {
+        if (yPos < 150) {
+          currentPage = pdfDoc.addPage([612, 792]);
+          yPos = height - 50;
+          
+          // Redraw header
+          currentPage.drawRectangle({
+            x: tableStartX,
+            y: yPos - 22,
+            width: actualTableWidth,
+            height: rowHeight,
+            color: primaryColor,
+          });
+          xPos = tableStartX + colSpacing;
+          headerLabels.forEach((header, idx) => {
+            currentPage.drawText(header, {
+              x: xPos + 2,
+              y: yPos - 5,
+              size: 9,
+              font: boldFont,
+              color: rgb(1, 1, 1),
+            });
+            xPos += colWidths[idx] + colSpacing;
+          });
+          yPos -= rowHeight + 8;
+        }
+
+        const rowData = [
+          formatDate(ticket.date),
+          String(ticket.ticket_number || '-').substring(0, 8),
+          String(ticket.equipment_type || ticket.description || '-').substring(0, 15),
+          String(driver.name || '-').substring(0, 10),
+          String(ticket.subcontractor || '-').substring(0, 12),
+          parseFloat(ticket.quantity || 0).toFixed(1),
+          `$${parseFloat(ticket.bill_rate || ticket.rate || 0).toFixed(2)}`,
+          `$${parseFloat(ticket.total_bill || 0).toFixed(2)}`
+        ];
+
+        xPos = tableStartX + colSpacing;
+        rowData.forEach((data, idx) => {
+          currentPage.drawText(data, {
+            x: xPos + 2,
+            y: yPos,
+            size: 9,
+            font: font,
+          });
+          xPos += colWidths[idx] + colSpacing;
+        });
+        yPos -= 18;
+      }
+
+      // Totals section - same as invoice
+      yPos -= 20;
+      const totalsX = width - 260;
+      const totalsRightX = width - 90;
+
+      // Subtotal
+      currentPage.drawText('Subtotal:', { x: totalsX, y: yPos, size: 11, font });
+      currentPage.drawText(`$${customerSubtotal.toFixed(2)}`, { x: totalsRightX, y: yPos, size: 11, font });
+
+      yPos -= 22;
+      // GST with number
+      const companyGstNumber = '818440612RT0001';
+      currentPage.drawText('GST (5%):', { x: totalsX, y: yPos, size: 11, font });
+      currentPage.drawText(`#${companyGstNumber}`, { x: totalsX + 55, y: yPos, size: 9, font, color: rgb(0.4, 0.4, 0.4) });
+      currentPage.drawText(`$${customerGst.toFixed(2)}`, { x: totalsRightX, y: yPos, size: 11, font });
+
+      yPos -= 22;
+      // Line above total
+      currentPage.drawRectangle({
+        x: totalsX - 15,
+        y: yPos + 6,
+        width: 220,
+        height: 1.5,
+        color: rgb(0.4, 0.4, 0.4),
+      });
+
+      yPos -= 12;
+      // Total
+      currentPage.drawText('Total:', {
+        x: totalsX,
+        y: yPos,
+        size: 16,
+        font: boldFont,
+        color: primaryColor,
+      });
+      currentPage.drawText(`$${customerTotal.toFixed(2)}`, {
+        x: totalsRightX,
+        y: yPos,
+        size: 16,
+        font: boldFont,
+        color: primaryColor,
+      });
+    }
+
+    // Final page with Total Pay to Driver
+    let finalPage = pdfDoc.addPage([612, 792]);
+    const finalWidth = 612;
+    const finalHeight = 792;
+    let finalY = finalHeight - 100;
+
+    finalPage.drawText('SETTLEMENT SUMMARY', {
+      x: margin,
+      y: finalY,
+      size: 28,
+      font: boldFont,
+      color: primaryColor,
+    });
+
+    finalY -= 40;
+    finalPage.drawText(`Driver: ${driver.name} (${driver.user_id_code})`, {
+      x: margin,
+      y: finalY,
+      size: 14,
+      font: font,
+    });
+
+    finalY -= 25;
+    finalPage.drawText(`Period: ${formatDate(startDate)} to ${formatDate(endDate)}`, {
+      x: margin,
+      y: finalY,
+      size: 12,
+      font: font,
+      color: rgb(0.5, 0.5, 0.5),
+    });
+
+    finalY -= 50;
+    // Total Pay box
+    finalPage.drawRectangle({
+      x: margin,
+      y: finalY - 15,
+      width: finalWidth - 2 * margin,
+      height: 50,
+      color: rgb(0.96, 0.96, 0.96),
+    });
+    
+    finalPage.drawText('Total Pay to Driver:', {
+      x: margin + 20,
+      y: finalY + 5,
+      size: 18,
+      font: boldFont,
+      color: primaryColor,
+    });
+    
+    finalPage.drawText(`$${grandTotalPay.toFixed(2)}`, {
+      x: finalWidth - margin - 120,
+      y: finalY + 5,
+      size: 18,
+      font: boldFont,
+      color: primaryColor,
+    });
+
+    const pdfBytes = await pdfDoc.save();
+
+    // Headers
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
-
-    // ✅ SET CORRECT PDF HEADERS
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
-    // ✅ SEND DUMMY PDF
-    const dummyPdf = Buffer.from(
-      `%PDF-1.4
-1 0 obj
-<< /Type /Catalog /Pages 2 0 R >>
-endobj
-2 0 obj
-<< /Type /Pages /Kids [3 0 R] /Count 1 >>
-endobj
-3 0 obj
-<< /Type /Page /Parent 2 0 R /Resources <<>> /Contents 4 0 R >>
-endobj
-4 0 obj
-<< /Length 60 >>
-stream
-BT /F1 18 Tf 72 720 Td (DRIVER SETTLEMENT) Tj
-/Courier 12 Tf 72 690 Td (Driver: ${driver.name} (${driver.user_id_code})) Tj
-72 670 Td (Period: ${startDate} to ${endDate}) Tj
-ET
-endstream
-endobj
-xref
-0 5
-0000000000 65535 f 
-0000000015 00000 n 
-0000000076 00000 n 
-0000000130 00000 n 
-0000000212 00000 n 
-trailer
-<< /Size 5 /Root 1 0 R >>
-startxref
-305
-%%EOF`
-    );
-
-    return res.status(200).send(dummyPdf);
+    return res.status(200).send(Buffer.from(pdfBytes));
   } catch (error) {
     console.error('Error downloading settlement:', error);
     res.setHeader('Content-Type', 'application/json');
