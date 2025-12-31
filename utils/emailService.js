@@ -8,38 +8,37 @@ const nodemailer = require('nodemailer');
 // Create reusable transporter object using SMTP transport
 // For production, configure these via environment variables
 // Default configuration uses GoDaddy SMTP settings
+
+
 const createTransporter = () => {
-  // Default configuration for GoDaddy (can be overridden via env vars)
-  const smtpHost = process.env.SMTP_HOST || 'smtpout.secureserver.net';
-  const smtpPort = parseInt(process.env.SMTP_PORT || '465', 10);
-  const smtpUser = process.env.SMTP_USER || 'info@noortruckinginc.com';
-  const smtpPass = process.env.SMTP_PASS || '';
-  
-  // Validate required configuration
-  if (!smtpUser || !smtpPass) {
-    console.warn('[Email Service] SMTP credentials not configured. Please set SMTP_USER and SMTP_PASS environment variables.');
+  const smtpHost = process.env.SMTP_HOST;
+  const smtpPort = Number(process.env.SMTP_PORT); // ❗ no default
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
+
+  if (!smtpHost || !smtpPort || !smtpUser || !smtpPass) {
+    throw new Error('SMTP environment variables are missing');
   }
-  
+
   const transporter = nodemailer.createTransport({
     host: smtpHost,
     port: smtpPort,
-    secure: smtpPort === 465, // true for 465 (SSL), false for 587 (TLS)
+    secure: false, // ❗ MUST be false for 587
     auth: {
       user: smtpUser,
       pass: smtpPass,
     },
-    // Increased timeouts for GoDaddy SMTP
-    connectionTimeout: 30000, // 30 seconds
+    connectionTimeout: 30000,
     greetingTimeout: 30000,
     socketTimeout: 30000,
-    // TLS options for better compatibility with GoDaddy
     tls: {
-      rejectUnauthorized: false // GoDaddy certificates may need this setting
-    }
+      rejectUnauthorized: false,
+    },
   });
 
   return transporter;
 };
+
 
 /**
  * Send invoice email with PDF attachment
