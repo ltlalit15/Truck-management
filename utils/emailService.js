@@ -12,7 +12,7 @@ const nodemailer = require('nodemailer');
 
 const createTransporter = () => {
   const smtpHost = process.env.SMTP_HOST;
-  const smtpPort = Number(process.env.SMTP_PORT); // ❗ no default
+  const smtpPort = Number(process.env.SMTP_PORT);
   const smtpUser = process.env.SMTP_USER;
   const smtpPass = process.env.SMTP_PASS;
 
@@ -23,7 +23,7 @@ const createTransporter = () => {
   const transporter = nodemailer.createTransport({
     host: smtpHost,
     port: smtpPort,
-    secure: false, // ❗ MUST be false for 587
+    secure: smtpPort === 465, // ✅ AUTO secure
     auth: {
       user: smtpUser,
       pass: smtpPass,
@@ -31,13 +31,11 @@ const createTransporter = () => {
     connectionTimeout: 30000,
     greetingTimeout: 30000,
     socketTimeout: 30000,
-    tls: {
-      rejectUnauthorized: false,
-    },
   });
 
   return transporter;
 };
+
 
 
 /**
