@@ -7,11 +7,12 @@ const nodemailer = require('nodemailer');
 
 // Create reusable transporter object using SMTP transport
 // For production, configure these via environment variables
+// Default configuration uses GoDaddy SMTP settings
 const createTransporter = () => {
-  // Default configuration (can be overridden via env vars)
-  const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
-  const smtpPort = parseInt(process.env.SMTP_PORT || '587', 10);
-  const smtpUser = process.env.SMTP_USER || '';
+  // Default configuration for GoDaddy (can be overridden via env vars)
+  const smtpHost = process.env.SMTP_HOST || 'smtpout.secureserver.net';
+  const smtpPort = parseInt(process.env.SMTP_PORT || '465', 10);
+  const smtpUser = process.env.SMTP_USER || 'info@noortruckinginc.com';
   const smtpPass = process.env.SMTP_PASS || '';
   
   // Validate required configuration
@@ -22,15 +23,19 @@ const createTransporter = () => {
   const transporter = nodemailer.createTransport({
     host: smtpHost,
     port: smtpPort,
-    secure: smtpPort === 465, // true for 465, false for other ports
+    secure: smtpPort === 465, // true for 465 (SSL), false for 587 (TLS)
     auth: {
       user: smtpUser,
       pass: smtpPass,
     },
-    // Add connection timeout
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 10000,
+    // Increased timeouts for GoDaddy SMTP
+    connectionTimeout: 30000, // 30 seconds
+    greetingTimeout: 30000,
+    socketTimeout: 30000,
+    // TLS options for better compatibility with GoDaddy
+    tls: {
+      rejectUnauthorized: false // GoDaddy certificates may need this setting
+    }
   });
 
   return transporter;
@@ -93,7 +98,7 @@ Noor Trucking Inc.
 
     // Send email
     const info = await transporter.sendMail({
-      from: process.env.SMTP_FROM || process.env.SMTP_USER || 'noreply@noortrucking.com',
+      from: process.env.SMTP_FROM || process.env.SMTP_USER || 'info@noortruckinginc.com',
       to: to,
       subject: subject,
       text: textBody,
